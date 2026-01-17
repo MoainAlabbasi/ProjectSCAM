@@ -18,10 +18,10 @@ import mimetypes
 
 from .models import Course, CourseMajor, InstructorCourse, LectureFile
 from .forms import CourseForm, LectureFileForm, CourseMajorFormSet
-from accounts.models import User, UserActivity, Major, Level, Semester
-from accounts.views import AdminRequiredMixin, InstructorRequiredMixin, StudentRequiredMixin
-from notifications.models import NotificationManager
-from core.models import AuditLog
+from apps.accounts.models import User, UserActivity, Major, Level, Semester
+from apps.accounts.views import AdminRequiredMixin, InstructorRequiredMixin, StudentRequiredMixin
+from apps.notifications.models import NotificationManager
+from apps.core.models import AuditLog
 
 
 # ========== Student Views ==========
@@ -41,7 +41,7 @@ class StudentDashboardView(LoginRequiredMixin, StudentRequiredMixin, TemplateVie
         context['archived_courses'] = Course.objects.get_archived_courses_for_student(student)
         
         # الإشعارات غير المقروءة
-        from notifications.models import NotificationManager
+        from apps.notifications.models import NotificationManager
         context['unread_notifications'] = NotificationManager.get_unread_count(student)
         
         # آخر الملفات المرفوعة

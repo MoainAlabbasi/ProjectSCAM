@@ -13,19 +13,19 @@ urlpatterns = [
     path('django-admin/', admin.site.urls),
     
     # Core App (Home, Dashboard redirect)
-    path('', include('core.urls')),
+    path('', include('apps.core.urls')),
     
     # Accounts App (Authentication, Profile, User Management)
-    path('accounts/', include('accounts.urls')),
+    path('accounts/', include('apps.accounts.urls')),
     
     # Courses App (Courses, Files, Student/Instructor panels)
-    path('courses/', include('courses.urls')),
+    path('courses/', include('apps.courses.urls')),
     
     # Notifications App
-    path('notifications/', include('notifications.urls')),
+    path('notifications/', include('apps.notifications.urls')),
     
     # AI Features App
-    path('ai/', include('ai_features.urls')),
+    path('ai/', include('apps.ai_features.urls')),
 ]
 
 # Serve media files in development

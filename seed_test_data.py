@@ -13,9 +13,9 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
 from django.utils import timezone
-from accounts.models import Role, Permission, RolePermission, Major, Level, Semester, User
-from courses.models import Course, CourseMajor, InstructorCourse, LectureFile
-from notifications.models import Notification, NotificationRecipient
+from apps.accounts.models import Role, Permission, RolePermission, Major, Level, Semester, User
+from apps.courses.models import Course, CourseMajor, InstructorCourse, LectureFile
+from apps.notifications.models import Notification, NotificationRecipient
 
 def create_roles():
     """إنشاء الأدوار الأساسية بأحرف كبيرة (إصلاح BUG-001)"""

@@ -5,7 +5,7 @@ S-ACM - Smart Academic Content Management System
 
 from django import forms
 from .models import Notification
-from courses.models import Course
+from apps.courses.models import Course
 
 
 class NotificationForm(forms.ModelForm):

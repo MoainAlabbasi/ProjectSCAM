@@ -110,8 +110,8 @@ class NotificationService:
         """
         إرسال إشعار عند رفع ملف جديد
         """
-        from notifications.models import Notification
-        from accounts.models import User
+        from apps.notifications.models import Notification
+        from apps.accounts.models import User
         
         course = file_obj.course
         
@@ -145,8 +145,8 @@ class NotificationService:
         """
         إرسال إعلان عام
         """
-        from notifications.models import Notification
-        from accounts.models import User
+        from apps.notifications.models import Notification
+        from apps.accounts.models import User
         
         users = User.objects.filter(account_status='active')
         
@@ -186,7 +186,7 @@ class ArchiveService:
         - و مستوى الطالب أعلى من مستوى المقرر
         - فإن المقرر يعتبر مؤرشفاً
         """
-        from accounts.models import Semester
+        from apps.accounts.models import Semester
         
         # الحصول على الفصل الحالي
         current_semester = Semester.objects.filter(is_current=True).first()
@@ -209,7 +209,7 @@ class ArchiveService:
         """
         الحصول على مقررات الطالب (الحالية أو المؤرشفة)
         """
-        from courses.models import Course
+        from apps.courses.models import Course
         
         # الحصول على المقررات المرتبطة بتخصص الطالب
         courses = Course.objects.filter(
@@ -239,7 +239,7 @@ class PromotionService:
         """
         ترقية جميع طلاب مستوى معين إلى المستوى التالي
         """
-        from accounts.models import User, Level
+        from apps.accounts.models import User, Level
         
         # الحصول على المستوى التالي
         try:
@@ -263,7 +263,7 @@ class PromotionService:
         """
         الحصول على إحصائيات الترقية
         """
-        from accounts.models import User, Level
+        from apps.accounts.models import User, Level
         
         levels = Level.objects.all().order_by('level_number')
         stats = []

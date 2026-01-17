@@ -50,7 +50,7 @@ class NotificationService:
         """
         إرسال إشعار عند رفع ملف جديد
         """
-        from accounts.models import User
+        from apps.accounts.models import User
         
         course = file_obj.course
         
@@ -76,7 +76,7 @@ class NotificationService:
         """
         إرسال إعلان عام
         """
-        from accounts.models import User
+        from apps.accounts.models import User
         
         users = User.objects.filter(account_status='active')
         

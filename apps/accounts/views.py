@@ -26,7 +26,7 @@ from .forms import (
     SetPasswordActivationForm, PasswordResetRequestForm, ProfileUpdateForm,
     ChangePasswordForm, UserBulkImportForm, UserCreateForm, StudentPromotionForm
 )
-from core.models import AuditLog
+from apps.core.models import AuditLog
 
 
 # ========== Mixins ==========

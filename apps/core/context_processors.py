@@ -27,7 +27,7 @@ def user_notifications(request):
     إضافة عدد الإشعارات غير المقروءة
     """
     if request.user.is_authenticated:
-        from notifications.models import Notification
+        from apps.notifications.models import Notification
         unread_count = Notification.objects.filter(
             user=request.user,
             is_read=False
@@ -66,7 +66,7 @@ def current_semester(request):
     """
     إضافة الفصل الدراسي الحالي
     """
-    from accounts.models import Semester
+    from apps.accounts.models import Semester
     
     try:
         semester = Semester.objects.filter(is_current=True).first()

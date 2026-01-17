@@ -13,8 +13,8 @@ from django.urls import reverse_lazy
 
 from .models import Notification, NotificationRecipient, NotificationManager
 from .forms import NotificationForm, CourseNotificationForm
-from accounts.views import InstructorRequiredMixin, AdminRequiredMixin
-from courses.models import Course
+from apps.accounts.views import InstructorRequiredMixin, AdminRequiredMixin
+from apps.courses.models import Course
 
 
 class NotificationListView(LoginRequiredMixin, ListView):
@@ -176,7 +176,7 @@ class AdminNotificationCreateView(LoginRequiredMixin, AdminRequiredMixin, Create
         # تحديد المستلمين
         target = form.cleaned_data.get('target')
         
-        from accounts.models import User
+        from apps.accounts.models import User
         
         if target == 'all':
             users = User.objects.filter(account_status='active')

@@ -15,8 +15,8 @@ from datetime import timedelta
 
 from .models import AISummary, AIQuestion, AIChat, AIUsageLog
 from .services import GeminiService
-from courses.models import LectureFile
-from accounts.views import StudentRequiredMixin
+from apps.courses.models import LectureFile
+from apps.accounts.views import StudentRequiredMixin
 
 
 class AIRateLimitMixin:

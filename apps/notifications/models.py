@@ -171,7 +171,7 @@ class NotificationManager:
         إنشاء إشعار عند رفع ملف جديد
         يرسل إلى جميع طلاب المقرر
         """
-        from accounts.models import User
+        from apps.accounts.models import User
         
         notification = Notification.objects.create(
             sender=file_obj.uploader,
@@ -204,7 +204,7 @@ class NotificationManager:
         """
         إنشاء إشعار للمقرر
         """
-        from accounts.models import User
+        from apps.accounts.models import User
         
         notification = Notification.objects.create(
             sender=sender,
@@ -245,7 +245,7 @@ class NotificationManager:
         """
         إنشاء إشعار نظام
         """
-        from accounts.models import User
+        from apps.accounts.models import User
         
         notification = Notification.objects.create(
             sender=None,

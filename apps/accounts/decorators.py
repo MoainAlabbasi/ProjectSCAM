@@ -106,7 +106,7 @@ def course_access_required(view_func):
     """
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
-        from courses.models import Course
+        from apps.courses.models import Course
         
         if not request.user.is_authenticated:
             messages.error(request, 'يجب تسجيل الدخول أولاً')

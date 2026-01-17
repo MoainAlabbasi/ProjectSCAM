@@ -28,12 +28,12 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    # Project Apps
-    'core.apps.CoreConfig',
-    'accounts.apps.AccountsConfig',
-    'courses.apps.CoursesConfig',
-    'notifications.apps.NotificationsConfig',
-    'ai_features.apps.AiFeaturesConfig',
+    # Project Apps (located in apps/ directory)
+    'apps.core.apps.CoreConfig',
+    'apps.accounts.apps.AccountsConfig',
+    'apps.courses.apps.CoursesConfig',
+    'apps.notifications.apps.NotificationsConfig',
+    'apps.ai_features.apps.AiFeaturesConfig',
 ]
 
 MIDDLEWARE = [
@@ -60,10 +60,10 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 # Custom context processors
-                'core.context_processors.site_settings',
-                'core.context_processors.user_notifications',
-                'core.context_processors.user_role_info',
-                'core.context_processors.current_semester',
+                'apps.core.context_processors.site_settings',
+                'apps.core.context_processors.user_notifications',
+                'apps.core.context_processors.user_role_info',
+                'apps.core.context_processors.current_semester',
             ],
         },
     },
@@ -292,9 +292,9 @@ LOGGING = {
 # Custom Error Pages
 # =============================================================================
 # These handlers are used when DEBUG=False
-handler404 = 'core.views.custom_404'
-handler500 = 'core.views.custom_500'
-handler403 = 'core.views.custom_403'
+handler404 = 'apps.core.views.custom_404'
+handler500 = 'apps.core.views.custom_500'
+handler403 = 'apps.core.views.custom_403'
 
 # =============================================================================
 # Security Settings (for production)

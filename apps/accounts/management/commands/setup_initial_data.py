@@ -5,7 +5,7 @@ S-ACM - Smart Academic Content Management System
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
-from accounts.models import Role, Permission, RolePermission, Level, Semester, Major, User
+from apps.accounts.models import Role, Permission, RolePermission, Level, Semester, Major, User
 from datetime import date, timedelta
 
 

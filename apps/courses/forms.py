@@ -10,7 +10,7 @@ from django.conf import settings
 from pathlib import Path
 
 from .models import Course, CourseMajor, InstructorCourse, LectureFile
-from accounts.models import Major, Level, Semester
+from apps.accounts.models import Major, Level, Semester
 
 
 class CourseForm(forms.ModelForm):
