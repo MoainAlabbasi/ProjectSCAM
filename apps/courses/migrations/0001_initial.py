@@ -73,7 +73,7 @@ class Migration(migrations.Migration):
                 ('title', models.CharField(max_length=255, verbose_name='عنوان الملف')),
                 ('description', models.TextField(blank=True, null=True, verbose_name='وصف الملف')),
                 ('content_type', models.CharField(choices=[('local_file', 'ملف محلي'), ('external_link', 'رابط خارجي')], default='local_file', max_length=20, verbose_name='نوع المحتوى')),
-                ('local_file', models.FileField(blank=True, null=True, upload_to=courses.models.lecture_file_path, verbose_name='الملف المحلي')),
+                ('local_file', models.FileField(blank=True, null=True, upload_to=apps.courses.models.lecture_file_path, verbose_name='الملف المحلي')),
                 ('external_link', models.URLField(blank=True, max_length=512, null=True, verbose_name='الرابط الخارجي')),
                 ('file_type', models.CharField(choices=[('Lecture', 'محاضرة'), ('Summary', 'ملخص'), ('Exam', 'اختبار'), ('Assignment', 'واجب'), ('Reference', 'مرجع'), ('Other', 'أخرى')], default='Lecture', max_length=50, verbose_name='تصنيف الملف')),
                 ('file_size', models.BigIntegerField(blank=True, null=True, verbose_name='حجم الملف (بايت)')),
