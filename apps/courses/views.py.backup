@@ -1,10 +1,6 @@
 """
 Views لتطبيق courses
 S-ACM - Smart Academic Content Management System
-
-تم تحديث هذا الملف لـ:
-1. إصلاح ثغرة IDOR في FileDownloadView و FileViewView
-2. إضافة التحقق من تسجيل الطالب في المقرر قبل السماح بالتحميل
 """
 
 from django.shortcuts import render, redirect, get_object_or_404
@@ -17,20 +13,15 @@ from django.http import JsonResponse, HttpResponse, FileResponse
 from django.db.models import Q, Count
 from django.utils import timezone
 from django.conf import settings
-from django.core.exceptions import PermissionDenied
 from pathlib import Path
 import mimetypes
-import logging
 
 from .models import Course, CourseMajor, InstructorCourse, LectureFile
 from .forms import CourseForm, LectureFileForm, CourseMajorFormSet
-from .mixins import SecureFileDownloadMixin, FileAccessMixin, CourseEnrollmentMixin
 from apps.accounts.models import User, UserActivity, Major, Level, Semester
 from apps.accounts.views import AdminRequiredMixin, InstructorRequiredMixin, StudentRequiredMixin
 from apps.notifications.models import NotificationManager
 from apps.core.models import AuditLog
-
-logger = logging.getLogger('courses')
 
 
 # ========== Student Views ==========
@@ -82,18 +73,11 @@ class StudentCourseListView(LoginRequiredMixin, StudentRequiredMixin, ListView):
         return context
 
 
-class StudentCourseDetailView(LoginRequiredMixin, StudentRequiredMixin, CourseEnrollmentMixin, DetailView):
-    """تفاصيل المقرر للطالب - مع التحقق من التسجيل"""
+class StudentCourseDetailView(LoginRequiredMixin, StudentRequiredMixin, DetailView):
+    """تفاصيل المقرر للطالب"""
     model = Course
     template_name = 'student_panel/courses/detail.html'
     context_object_name = 'course'
-    
-    def get_object(self, queryset=None):
-        """التحقق من صلاحية الوصول للمقرر"""
-        course = super().get_object(queryset)
-        # التحقق من تسجيل الطالب في المقرر
-        self.check_course_access(self.request.user, course)
-        return course
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -114,42 +98,19 @@ class StudentCourseDetailView(LoginRequiredMixin, StudentRequiredMixin, CourseEn
         return context
 
 
-class FileDownloadView(SecureFileDownloadMixin, View):
-    """
-    تحميل الملفات بشكل آمن
-    
-    تم تأمين هذا العرض ضد ثغرة IDOR من خلال:
-    1. التحقق من تسجيل الطالب في المقرر (المستوى + التخصص + الفصل الدراسي)
-    2. التحقق من أن الملف مرئي (للطلاب)
-    3. التحقق من أن الملف غير محذوف
-    
-    Security Fix: IDOR Vulnerability
-    - قبل الإصلاح: أي طالب يمكنه تحميل أي ملف بمعرفة الـ ID
-    - بعد الإصلاح: يتم التحقق من تسجيل الطالب في المقرر قبل السماح بالتحميل
-    """
+class FileDownloadView(LoginRequiredMixin, View):
+    """تحميل الملفات"""
     
     def get(self, request, pk):
-        user = request.user
+        file_obj = get_object_or_404(LectureFile, pk=pk, is_deleted=False)
         
-        try:
-            # استخدام get_secure_file للتحقق من جميع الصلاحيات
-            # هذا يحل ثغرة IDOR بالتحقق من:
-            # - تسجيل الطالب في المقرر (المستوى + التخصص + الفصل الدراسي)
-            # - أن الملف مرئي (للطلاب)
-            # - أن الملف غير محذوف
-            require_visible = user.is_student()
-            file_obj = self.get_secure_file(pk, require_visible=require_visible)
-        except PermissionDenied as e:
-            logger.warning(
-                f"IDOR attempt blocked: User {user.academic_id} tried to access file {pk}. "
-                f"Reason: {str(e)}"
-            )
-            messages.error(request, str(e) if str(e) else 'ليس لديك صلاحية الوصول لهذا الملف.')
-            if user.is_student():
-                return redirect('courses:student_dashboard')
-            elif user.is_instructor():
-                return redirect('courses:instructor_dashboard')
-            return redirect('core:dashboard_redirect')
+        # التحقق من الصلاحية
+        user = request.user
+        if user.is_student():
+            # التحقق من أن الطالب مسجل في المقرر
+            if not file_obj.is_visible:
+                messages.error(request, 'هذا الملف غير متاح حالياً.')
+                return redirect('courses:student_course_detail', pk=file_obj.course.pk)
         
         # زيادة عداد التحميل
         file_obj.increment_download()
@@ -182,26 +143,11 @@ class FileDownloadView(SecureFileDownloadMixin, View):
         return redirect('courses:student_dashboard')
 
 
-class FileViewView(SecureFileDownloadMixin, View):
-    """
-    عرض الملفات (للـ PDF والفيديو) بشكل آمن
-    
-    تم تأمين هذا العرض ضد ثغرة IDOR (نفس منطق FileDownloadView)
-    """
+class FileViewView(LoginRequiredMixin, View):
+    """عرض الملفات (للـ PDF والفيديو)"""
     
     def get(self, request, pk):
-        user = request.user
-        
-        try:
-            require_visible = user.is_student()
-            file_obj = self.get_secure_file(pk, require_visible=require_visible)
-        except PermissionDenied as e:
-            logger.warning(
-                f"IDOR attempt blocked: User {user.academic_id} tried to view file {pk}. "
-                f"Reason: {str(e)}"
-            )
-            messages.error(request, str(e) if str(e) else 'ليس لديك صلاحية الوصول لهذا الملف.')
-            return redirect('courses:student_dashboard')
+        file_obj = get_object_or_404(LectureFile, pk=pk, is_deleted=False)
         
         # زيادة عداد المشاهدة
         file_obj.increment_view()
@@ -348,10 +294,9 @@ class FileUpdateView(LoginRequiredMixin, InstructorRequiredMixin, UpdateView):
     """تحديث ملف"""
     model = LectureFile
     form_class = LectureFileForm
-    template_name = 'instructor_panel/files/edit.html'
+    template_name = 'instructor_panel/files/update.html'
     
     def get_queryset(self):
-        # المدرس يمكنه تعديل ملفاته فقط
         return LectureFile.objects.filter(uploader=self.request.user, is_deleted=False)
     
     def get_form_kwargs(self):
@@ -369,27 +314,19 @@ class FileUpdateView(LoginRequiredMixin, InstructorRequiredMixin, UpdateView):
 
 
 class FileDeleteView(LoginRequiredMixin, InstructorRequiredMixin, View):
-    """حذف ملف (Soft Delete)"""
+    """حذف ملف (حذف ناعم)"""
     
     def post(self, request, pk):
-        file_obj = get_object_or_404(LectureFile, pk=pk, uploader=request.user, is_deleted=False)
-        
-        # Soft delete
-        file_obj.is_deleted = True
-        file_obj.deleted_at = timezone.now()
-        file_obj.save()
-        
-        # تسجيل في سجل التدقيق
-        AuditLog.log(
-            user=request.user,
-            action='delete',
-            model_name='LectureFile',
-            object_id=file_obj.id,
-            object_repr=str(file_obj),
-            request=request
+        file_obj = get_object_or_404(
+            LectureFile,
+            pk=pk,
+            uploader=request.user,
+            is_deleted=False
         )
         
-        messages.success(request, f'تم حذف الملف "{file_obj.title}" بنجاح.')
+        file_obj.soft_delete()
+        
+        messages.success(request, f'تم حذف الملف "{file_obj.title}".')
         return redirect('courses:instructor_course_detail', pk=file_obj.course.pk)
 
 
@@ -397,15 +334,20 @@ class FileToggleVisibilityView(LoginRequiredMixin, InstructorRequiredMixin, View
     """تبديل ظهور الملف"""
     
     def post(self, request, pk):
-        file_obj = get_object_or_404(LectureFile, pk=pk, uploader=request.user, is_deleted=False)
+        file_obj = get_object_or_404(
+            LectureFile,
+            pk=pk,
+            uploader=request.user,
+            is_deleted=False
+        )
         
         file_obj.is_visible = not file_obj.is_visible
-        file_obj.save()
+        file_obj.save(update_fields=['is_visible'])
         
         status = 'مرئي' if file_obj.is_visible else 'مخفي'
-        messages.success(request, f'تم تغيير حالة الملف "{file_obj.title}" إلى {status}.')
+        messages.success(request, f'تم تغيير حالة الملف إلى {status}.')
         
-        # إرسال إشعار إذا تم جعل الملف مرئياً
+        # إرسال إشعار إذا أصبح مرئياً
         if file_obj.is_visible:
             NotificationManager.create_file_upload_notification(
                 file_obj,
@@ -415,7 +357,7 @@ class FileToggleVisibilityView(LoginRequiredMixin, InstructorRequiredMixin, View
         return redirect('courses:instructor_course_detail', pk=file_obj.course.pk)
 
 
-# ========== Admin Course Management Views ==========
+# ========== Admin Course Views ==========
 
 class AdminCourseListView(LoginRequiredMixin, AdminRequiredMixin, ListView):
     """قائمة المقررات للأدمن"""
@@ -438,8 +380,8 @@ class AdminCourseListView(LoginRequiredMixin, AdminRequiredMixin, ListView):
             queryset = queryset.filter(semester_id=semester)
         if search:
             queryset = queryset.filter(
-                Q(course_name__icontains=search) |
-                Q(course_code__icontains=search)
+                Q(course_code__icontains=search) |
+                Q(course_name__icontains=search)
             )
         
         return queryset.order_by('course_code')
@@ -458,68 +400,65 @@ class AdminCourseCreateView(LoginRequiredMixin, AdminRequiredMixin, CreateView):
     template_name = 'admin_panel/courses/create.html'
     success_url = reverse_lazy('courses:admin_course_list')
     
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        if self.request.POST:
+            context['major_formset'] = CourseMajorFormSet(self.request.POST)
+        else:
+            context['major_formset'] = CourseMajorFormSet()
+        return context
+    
     def form_valid(self, form):
-        response = super().form_valid(form)
+        context = self.get_context_data()
+        major_formset = context['major_formset']
         
-        AuditLog.log(
-            user=self.request.user,
-            action='create',
-            model_name='Course',
-            object_id=self.object.id,
-            object_repr=str(self.object),
-            request=self.request
-        )
+        if major_formset.is_valid():
+            self.object = form.save()
+            major_formset.instance = self.object
+            major_formset.save()
+            
+            AuditLog.log(
+                user=self.request.user,
+                action='create',
+                model_name='Course',
+                object_id=self.object.id,
+                object_repr=str(self.object),
+                request=self.request
+            )
+            
+            messages.success(self.request, f'تم إنشاء المقرر "{self.object.course_name}" بنجاح.')
+            return redirect(self.success_url)
         
-        messages.success(self.request, f'تم إنشاء المقرر "{self.object.course_name}" بنجاح.')
-        return response
+        return self.render_to_response(context)
 
 
 class AdminCourseUpdateView(LoginRequiredMixin, AdminRequiredMixin, UpdateView):
     """تحديث مقرر"""
     model = Course
     form_class = CourseForm
-    template_name = 'admin_panel/courses/edit.html'
+    template_name = 'admin_panel/courses/update.html'
     success_url = reverse_lazy('courses:admin_course_list')
-    
-    def form_valid(self, form):
-        response = super().form_valid(form)
-        
-        AuditLog.log(
-            user=self.request.user,
-            action='update',
-            model_name='Course',
-            object_id=self.object.id,
-            object_repr=str(self.object),
-            request=self.request
-        )
-        
-        messages.success(self.request, f'تم تحديث المقرر "{self.object.course_name}" بنجاح.')
-        return response
-
-
-class AdminCourseDetailView(LoginRequiredMixin, AdminRequiredMixin, DetailView):
-    """تفاصيل المقرر للأدمن"""
-    model = Course
-    template_name = 'admin_panel/courses/detail.html'
-    context_object_name = 'course'
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        course = self.object
-        
-        context['files'] = course.files.filter(is_deleted=False)
-        context['instructors'] = course.instructor_courses.select_related('instructor')
-        context['majors'] = course.course_majors.select_related('major')
-        
-        # عدد الطلاب
-        context['students_count'] = User.objects.filter(
-            role__role_name='Student',
-            major__in=course.course_majors.values_list('major', flat=True),
-            level=course.level,
-            account_status='active'
-        ).count()
-        
+        if self.request.POST:
+            context['major_formset'] = CourseMajorFormSet(self.request.POST, instance=self.object)
+        else:
+            context['major_formset'] = CourseMajorFormSet(instance=self.object)
         return context
+    
+    def form_valid(self, form):
+        context = self.get_context_data()
+        major_formset = context['major_formset']
+        
+        if major_formset.is_valid():
+            self.object = form.save()
+            major_formset.save()
+            
+            messages.success(self.request, f'تم تحديث المقرر "{self.object.course_name}" بنجاح.')
+            return redirect(self.success_url)
+        
+        return self.render_to_response(context)
 
 
 class AdminInstructorAssignView(LoginRequiredMixin, AdminRequiredMixin, View):
@@ -529,80 +468,32 @@ class AdminInstructorAssignView(LoginRequiredMixin, AdminRequiredMixin, View):
     def get(self, request, pk):
         course = get_object_or_404(Course, pk=pk)
         instructors = User.objects.filter(role__role_name='Instructor', account_status='active')
-        assigned = course.instructor_courses.values_list('instructor_id', flat=True)
+        current_assignments = course.instructor_courses.all()
         
-        context = {
+        return render(request, self.template_name, {
             'course': course,
             'instructors': instructors,
-            'assigned': list(assigned)
-        }
-        return render(request, self.template_name, context)
+            'current_assignments': current_assignments
+        })
     
     def post(self, request, pk):
         course = get_object_or_404(Course, pk=pk)
-        instructor_ids = request.POST.getlist('instructors')
+        instructor_id = request.POST.get('instructor')
+        is_primary = request.POST.get('is_primary') == 'on'
         
-        # حذف التعيينات القديمة
-        InstructorCourse.objects.filter(course=course).delete()
-        
-        # إنشاء التعيينات الجديدة
-        for idx, instructor_id in enumerate(instructor_ids):
-            InstructorCourse.objects.create(
+        if instructor_id:
+            instructor = get_object_or_404(User, pk=instructor_id)
+            
+            # التحقق من عدم وجود تعيين سابق
+            assignment, created = InstructorCourse.objects.get_or_create(
+                instructor=instructor,
                 course=course,
-                instructor_id=instructor_id,
-                is_primary=(idx == 0)  # الأول هو الرئيسي
+                defaults={'is_primary': is_primary}
             )
+            
+            if created:
+                messages.success(request, f'تم تعيين {instructor.full_name} للمقرر {course.course_name}.')
+            else:
+                messages.warning(request, 'هذا المدرس معين بالفعل لهذا المقرر.')
         
-        AuditLog.log(
-            user=request.user,
-            action='update',
-            model_name='InstructorCourse',
-            object_id=course.id,
-            object_repr=f'تعيين مدرسين لـ {course}',
-            changes={'instructors': instructor_ids},
-            request=request
-        )
-        
-        messages.success(request, f'تم تحديث المدرسين للمقرر "{course.course_name}" بنجاح.')
-        return redirect('courses:admin_course_detail', pk=course.pk)
-
-
-class AdminCourseMajorView(LoginRequiredMixin, AdminRequiredMixin, View):
-    """ربط المقرر بالتخصصات"""
-    template_name = 'admin_panel/courses/assign_majors.html'
-    
-    def get(self, request, pk):
-        course = get_object_or_404(Course, pk=pk)
-        majors = Major.objects.filter(is_active=True)
-        assigned = course.course_majors.values_list('major_id', flat=True)
-        
-        context = {
-            'course': course,
-            'majors': majors,
-            'assigned': list(assigned)
-        }
-        return render(request, self.template_name, context)
-    
-    def post(self, request, pk):
-        course = get_object_or_404(Course, pk=pk)
-        major_ids = request.POST.getlist('majors')
-        
-        # حذف الربط القديم
-        CourseMajor.objects.filter(course=course).delete()
-        
-        # إنشاء الربط الجديد
-        for major_id in major_ids:
-            CourseMajor.objects.create(course=course, major_id=major_id)
-        
-        AuditLog.log(
-            user=request.user,
-            action='update',
-            model_name='CourseMajor',
-            object_id=course.id,
-            object_repr=f'ربط تخصصات لـ {course}',
-            changes={'majors': major_ids},
-            request=request
-        )
-        
-        messages.success(request, f'تم تحديث التخصصات للمقرر "{course.course_name}" بنجاح.')
-        return redirect('courses:admin_course_detail', pk=course.pk)
+        return redirect('courses:admin_instructor_assign', pk=pk)
