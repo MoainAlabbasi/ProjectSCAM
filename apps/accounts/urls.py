@@ -34,4 +34,6 @@ urlpatterns = [
     path('admin/users/create/', views.UserCreateView.as_view(), name='admin_user_create'),
     path('admin/users/import/', views.UserBulkImportView.as_view(), name='admin_user_import'),
     path('admin/users/promote/', views.StudentPromotionView.as_view(), name='admin_user_promote'),
+    path('admin/users/<int:pk>/', views.UserDetailView.as_view(), name='admin_user_detail'),
+    path('admin/users/<int:pk>/edit/', views.UserUpdateView.as_view(), name='admin_user_edit'),
 ]

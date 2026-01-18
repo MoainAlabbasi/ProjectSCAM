@@ -1,14 +1,15 @@
 {% extends 'base.html' %}
 {% load static %}
 
-{% block title %}إضافة مستخدم - S-ACM{% endblock %}
+{% block title %}تعديل المستخدم - S-ACM{% endblock %}
 
 {% block content %}
 <nav aria-label="breadcrumb" class="mb-4">
     <ol class="breadcrumb">
         <li class="breadcrumb-item"><a href="{% url 'accounts:admin_dashboard' %}">لوحة التحكم</a></li>
         <li class="breadcrumb-item"><a href="{% url 'accounts:admin_user_list' %}">المستخدمين</a></li>
-        <li class="breadcrumb-item active">إضافة مستخدم</li>
+        <li class="breadcrumb-item"><a href="{% url 'accounts:admin_user_detail' object.pk %}">{{ object.full_name|default:object.academic_id }}</a></li>
+        <li class="breadcrumb-item active">تعديل</li>
     </ol>
 </nav>
 
@@ -16,7 +17,7 @@
     <div class="col-lg-8">
         <div class="card">
             <div class="card-header">
-                <i class="bi bi-person-plus me-2"></i>إضافة مستخدم جديد
+                <i class="bi bi-pencil me-2"></i>تعديل بيانات المستخدم
             </div>
             <div class="card-body">
                 {% if messages %}
@@ -27,11 +28,6 @@
                 </div>
                 {% endfor %}
                 {% endif %}
-                
-                <div class="alert alert-info">
-                    <i class="bi bi-info-circle me-1"></i>
-                    سيتم إنشاء الحساب بحالة "غير مفعّل". سيقوم المستخدم بتفعيل حسابه بنفسه عبر صفحة التفعيل.
-                </div>
                 
                 <form method="post" novalidate>
                     {% csrf_token %}
@@ -98,9 +94,9 @@
                     
                     <div class="d-flex gap-2">
                         <button type="submit" class="btn btn-primary flex-fill">
-                            <i class="bi bi-person-plus me-1"></i>إضافة المستخدم
+                            <i class="bi bi-check-lg me-1"></i>حفظ التغييرات
                         </button>
-                        <a href="{% url 'accounts:admin_user_list' %}" class="btn btn-outline-secondary">
+                        <a href="{% url 'accounts:admin_user_detail' object.pk %}" class="btn btn-outline-secondary">
                             إلغاء
                         </a>
                     </div>

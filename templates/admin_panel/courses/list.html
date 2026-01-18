@@ -104,13 +104,10 @@
                         </td>
                         <td>
                             <div class="btn-group btn-group-sm">
-                                <a href="{% url 'courses:admin_course_edit' course.pk %}" class="btn btn-outline-primary" title="تعديل">
+                                <a href="{% url 'courses:admin_course_update' course.pk %}" class="btn btn-outline-primary" title="تعديل">
                                     <i class="bi bi-pencil"></i>
                                 </a>
-                                <a href="{% url 'courses:admin_course_detail' course.pk %}" class="btn btn-outline-info" title="عرض">
-                                    <i class="bi bi-eye"></i>
-                                </a>
-                                <a href="{% url 'courses:admin_assign_instructor' course.pk %}" class="btn btn-outline-success" title="تعيين مدرس">
+                                <a href="{% url 'courses:admin_instructor_assign' course.pk %}" class="btn btn-outline-success" title="تعيين مدرس">
                                     <i class="bi bi-person-plus"></i>
                                 </a>
                             </div>

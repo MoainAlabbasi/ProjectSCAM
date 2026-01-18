@@ -735,3 +735,59 @@ class StudentPromotionView(LoginRequiredMixin, AdminRequiredMixin, View):
             return redirect('accounts:admin_user_list')
         
         return render(request, self.template_name, {'form': form})
+
+
+# ========== User Detail & Update Views ==========
+
+class UserDetailView(LoginRequiredMixin, AdminRequiredMixin, View):
+    """عرض تفاصيل المستخدم"""
+    template_name = 'admin_panel/users/detail.html'
+    
+    def get(self, request, pk):
+        user = get_object_or_404(User, pk=pk)
+        
+        # إحصائيات المستخدم
+        context = {
+            'viewed_user': user,
+            'activities': UserActivity.objects.filter(user=user).order_by('-activity_time')[:20],
+        }
+        
+        # إحصائيات إضافية حسب الدور
+        if user.is_student():
+            from apps.courses.models import LectureFile
+            context['download_count'] = UserActivity.objects.filter(
+                user=user, activity_type='download'
+            ).count()
+        elif user.is_instructor():
+            from apps.courses.models import LectureFile, InstructorCourse
+            context['uploaded_files'] = LectureFile.objects.filter(
+                uploader=user, is_deleted=False
+            ).count()
+            context['assigned_courses'] = InstructorCourse.objects.filter(
+                instructor=user
+            ).select_related('course')
+        
+        return render(request, self.template_name, context)
+
+
+class UserUpdateView(LoginRequiredMixin, AdminRequiredMixin, UpdateView):
+    """تحديث بيانات المستخدم"""
+    model = User
+    form_class = UserCreateForm
+    template_name = 'admin_panel/users/edit.html'
+    success_url = reverse_lazy('accounts:admin_user_list')
+    
+    def form_valid(self, form):
+        response = super().form_valid(form)
+        
+        AuditLog.log(
+            user=self.request.user,
+            action='update',
+            model_name='User',
+            object_id=self.object.id,
+            object_repr=str(self.object),
+            request=self.request
+        )
+        
+        messages.success(self.request, f'تم تحديث بيانات المستخدم {self.object.full_name} بنجاح.')
+        return response
