@@ -1,75 +1,147 @@
 """
-خدمات الذكاء الاصطناعي المحدّثة
+خدمات الذكاء الاصطناعي - Google Gemini
 S-ACM - Smart Academic Content Management System
 
-تم تحديث هذا الملف لـ:
-1. استخدام google-generativeai SDK الرسمي بدلاً من OpenAI-compatible API
-2. إضافة دعم Celery للمهام الطويلة
-3. تحسين معالجة الأخطاء والـ Retry Logic
-4. إضافة Caching للنتائج
+تم تحديث هذا الملف لاستخدام:
+- google-genai SDK الرسمي (الإصدار الجديد)
+- موديل gemini-2.5-flash
+- Clean Code مع Error Handling محترف
+
+المؤلف: Manus AI
+التاريخ: 2026-01-19
 """
 
-import os
+from __future__ import annotations
+
 import json
 import hashlib
 import logging
-from pathlib import Path
-from typing import Optional, List, Dict, Any
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from enum import Enum
 from functools import wraps
+from pathlib import Path
+from typing import Optional, List, Dict, Any, Callable, TypeVar, Generic
+
 from django.conf import settings
 from django.core.cache import cache
 
+# ========== Logging Configuration ==========
 logger = logging.getLogger('ai_features')
 
-# Google Generative AI SDK
-try:
-    import google.generativeai as genai
-    GENAI_AVAILABLE = True
-except ImportError:
-    GENAI_AVAILABLE = False
-    logger.warning("google-generativeai not installed. Run: pip install google-generativeai")
-
-# OpenAI-compatible API (Fallback)
-try:
-    from openai import OpenAI
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-
-# PDF Processing
-try:
-    import pdfplumber
-    PDF_AVAILABLE = True
-except ImportError:
-    PDF_AVAILABLE = False
-
-# Word Processing
-try:
-    from docx import Document
-    DOCX_AVAILABLE = True
-except ImportError:
-    DOCX_AVAILABLE = False
-
-# PowerPoint Processing
-try:
-    from pptx import Presentation
-    PPTX_AVAILABLE = True
-except ImportError:
-    PPTX_AVAILABLE = False
+# ========== Constants ==========
+GEMINI_API_KEY = "AIzaSyC0caScddcPQHxN2fQUSYj02sZ66MG-_80"
+GEMINI_MODEL = "gemini-2.5-flash"
+MAX_INPUT_LENGTH = 30000
+CACHE_TIMEOUT = 3600  # 1 hour
+MAX_RETRIES = 3
 
 
-def cache_ai_result(timeout: int = 3600):
+# ========== Custom Exceptions ==========
+
+class GeminiError(Exception):
+    """Base exception for Gemini-related errors."""
+    pass
+
+
+class GeminiConfigurationError(GeminiError):
+    """Raised when Gemini is not properly configured."""
+    pass
+
+
+class GeminiAPIError(GeminiError):
+    """Raised when Gemini API returns an error."""
+    
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class GeminiRateLimitError(GeminiAPIError):
+    """Raised when rate limit is exceeded."""
+    pass
+
+
+class TextExtractionError(GeminiError):
+    """Raised when text extraction from file fails."""
+    pass
+
+
+# ========== Enums ==========
+
+class QuestionType(Enum):
+    """أنواع الأسئلة المدعومة."""
+    MCQ = "mcq"
+    TRUE_FALSE = "true_false"
+    SHORT_ANSWER = "short_answer"
+    MIXED = "mixed"
+
+
+class ContentType(Enum):
+    """أنواع المحتوى المدعومة."""
+    PDF = "pdf"
+    DOCX = "docx"
+    PPTX = "pptx"
+    TEXT = "text"
+    UNKNOWN = "unknown"
+
+
+# ========== Data Classes ==========
+
+@dataclass
+class Question:
+    """نموذج السؤال."""
+    type: str
+    question: str
+    answer: str
+    options: Optional[List[str]] = None
+    explanation: Optional[str] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """تحويل إلى قاموس."""
+        result = {
+            'type': self.type,
+            'question': self.question,
+            'answer': self.answer,
+        }
+        if self.options:
+            result['options'] = self.options
+        if self.explanation:
+            result['explanation'] = self.explanation
+        return result
+
+
+@dataclass
+class AIResponse:
+    """نموذج استجابة AI."""
+    success: bool
+    data: Any = None
+    error: Optional[str] = None
+    cached: bool = False
+
+
+# ========== Decorators ==========
+
+T = TypeVar('T')
+
+
+def cache_result(timeout: int = CACHE_TIMEOUT):
     """
-    Decorator لتخزين نتائج AI في الكاش
+    Decorator لتخزين نتائج AI في الكاش.
     
     Args:
-        timeout: مدة التخزين بالثواني (افتراضي: ساعة)
+        timeout: مدة التخزين بالثواني
+        
+    Example:
+        @cache_result(timeout=3600)
+        def generate_summary(self, text: str) -> str:
+            ...
     """
-    def decorator(func):
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
-        def wrapper(self, text: str, *args, **kwargs):
-            # إنشاء مفتاح الكاش من hash النص والمعاملات
-            cache_key = f"ai:{func.__name__}:{hashlib.md5(text.encode()).hexdigest()}"
+        def wrapper(self, text: str, *args, **kwargs) -> T:
+            # إنشاء مفتاح الكاش
+            cache_key = _generate_cache_key(func.__name__, text, args, kwargs)
             
             # محاولة الحصول من الكاش
             cached_result = cache.get(cache_key)
@@ -81,237 +153,336 @@ def cache_ai_result(timeout: int = 3600):
             result = func(self, text, *args, **kwargs)
             
             # تخزين في الكاش
-            if result:
+            if result is not None:
                 cache.set(cache_key, result, timeout)
+                logger.debug(f"Cached result for {func.__name__}")
             
             return result
         return wrapper
     return decorator
 
 
+def _generate_cache_key(func_name: str, text: str, args: tuple, kwargs: dict) -> str:
+    """توليد مفتاح الكاش."""
+    content = f"{func_name}:{text}:{str(args)}:{str(sorted(kwargs.items()))}"
+    return f"ai:{hashlib.md5(content.encode()).hexdigest()}"
+
+
+def retry_on_error(max_retries: int = MAX_RETRIES, delay_base: float = 1.0):
+    """
+    Decorator لإعادة المحاولة عند الفشل.
+    
+    Args:
+        max_retries: عدد المحاولات القصوى
+        delay_base: أساس التأخير (exponential backoff)
+    """
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> T:
+            import time
+            last_exception = None
+            
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except GeminiRateLimitError as e:
+                    last_exception = e
+                    delay = delay_base * (2 ** attempt)
+                    logger.warning(f"Rate limit hit, retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(delay)
+                except GeminiAPIError as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        delay = delay_base * (2 ** attempt)
+                        logger.warning(f"API error, retrying in {delay}s: {e}")
+                        time.sleep(delay)
+                    else:
+                        raise
+                except Exception as e:
+                    logger.error(f"Unexpected error in {func.__name__}: {e}")
+                    raise
+            
+            raise last_exception or GeminiAPIError("Max retries exceeded")
+        return wrapper
+    return decorator
+
+
+# ========== Text Extractors ==========
+
+class TextExtractor(ABC):
+    """Abstract base class for text extractors."""
+    
+    @abstractmethod
+    def extract(self, file_path: Path) -> str:
+        """استخراج النص من الملف."""
+        pass
+    
+    @abstractmethod
+    def supports(self, file_path: Path) -> bool:
+        """التحقق من دعم نوع الملف."""
+        pass
+
+
+class PDFExtractor(TextExtractor):
+    """مستخرج النص من ملفات PDF."""
+    
+    def supports(self, file_path: Path) -> bool:
+        return file_path.suffix.lower() == '.pdf'
+    
+    def extract(self, file_path: Path) -> str:
+        try:
+            import pdfplumber
+        except ImportError:
+            raise TextExtractionError("pdfplumber not installed. Run: pip install pdfplumber")
+        
+        try:
+            text_parts = []
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_parts.append(page_text)
+            return "\n".join(text_parts)
+        except Exception as e:
+            raise TextExtractionError(f"Failed to extract text from PDF: {e}")
+
+
+class DocxExtractor(TextExtractor):
+    """مستخرج النص من ملفات Word."""
+    
+    def supports(self, file_path: Path) -> bool:
+        return file_path.suffix.lower() == '.docx'
+    
+    def extract(self, file_path: Path) -> str:
+        try:
+            from docx import Document
+        except ImportError:
+            raise TextExtractionError("python-docx not installed. Run: pip install python-docx")
+        
+        try:
+            doc = Document(file_path)
+            return "\n".join(para.text for para in doc.paragraphs if para.text)
+        except Exception as e:
+            raise TextExtractionError(f"Failed to extract text from DOCX: {e}")
+
+
+class PptxExtractor(TextExtractor):
+    """مستخرج النص من ملفات PowerPoint."""
+    
+    def supports(self, file_path: Path) -> bool:
+        return file_path.suffix.lower() == '.pptx'
+    
+    def extract(self, file_path: Path) -> str:
+        try:
+            from pptx import Presentation
+        except ImportError:
+            raise TextExtractionError("python-pptx not installed. Run: pip install python-pptx")
+        
+        try:
+            prs = Presentation(file_path)
+            text_parts = []
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text:
+                        text_parts.append(shape.text)
+            return "\n".join(text_parts)
+        except Exception as e:
+            raise TextExtractionError(f"Failed to extract text from PPTX: {e}")
+
+
+class PlainTextExtractor(TextExtractor):
+    """مستخرج النص من الملفات النصية."""
+    
+    SUPPORTED_EXTENSIONS = {'.txt', '.md', '.rst', '.csv'}
+    
+    def supports(self, file_path: Path) -> bool:
+        return file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS
+    
+    def extract(self, file_path: Path) -> str:
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except UnicodeDecodeError:
+            # محاولة مع encoding مختلف
+            with open(file_path, 'r', encoding='cp1256') as f:
+                return f.read()
+        except Exception as e:
+            raise TextExtractionError(f"Failed to read text file: {e}")
+
+
+class TextExtractorFactory:
+    """مصنع لإنشاء مستخرجات النص."""
+    
+    _extractors: List[TextExtractor] = [
+        PDFExtractor(),
+        DocxExtractor(),
+        PptxExtractor(),
+        PlainTextExtractor(),
+    ]
+    
+    @classmethod
+    def get_extractor(cls, file_path: Path) -> Optional[TextExtractor]:
+        """الحصول على المستخرج المناسب للملف."""
+        for extractor in cls._extractors:
+            if extractor.supports(file_path):
+                return extractor
+        return None
+    
+    @classmethod
+    def extract_text(cls, file_path: Path) -> str:
+        """استخراج النص من الملف."""
+        extractor = cls.get_extractor(file_path)
+        if extractor is None:
+            raise TextExtractionError(f"Unsupported file type: {file_path.suffix}")
+        return extractor.extract(file_path)
+
+
+# ========== Gemini Service ==========
+
 class GeminiService:
     """
-    خدمة Google Gemini للذكاء الاصطناعي
+    خدمة Google Gemini للذكاء الاصطناعي.
     
-    تستخدم google-generativeai SDK الرسمي مع fallback إلى OpenAI-compatible API
+    تستخدم google-genai SDK الرسمي مع موديل gemini-2.5-flash.
     
-    التحسينات:
-    1. استخدام SDK الرسمي لأداء أفضل
-    2. Retry Logic للتعامل مع الأخطاء المؤقتة
-    3. Caching للنتائج المتكررة
-    4. معالجة أخطاء محسّنة
+    Features:
+        - Clean Code architecture
+        - Comprehensive error handling
+        - Result caching
+        - Retry logic with exponential backoff
+        - Text extraction from multiple file formats
+    
+    Example:
+        service = GeminiService()
+        
+        # توليد تلخيص
+        summary = service.generate_summary("نص طويل...")
+        
+        # توليد أسئلة
+        questions = service.generate_questions("نص...", QuestionType.MCQ, 5)
+        
+        # سؤال المستند
+        answer = service.ask_document("نص...", "ما هي الفكرة الرئيسية؟")
     """
     
-    # النماذج المتاحة
-    MODELS = {
-        'flash': 'gemini-2.0-flash',
-        'pro': 'gemini-1.5-pro',
-        'default': 'gemini-2.0-flash'
-    }
-    
-    # الحد الأقصى لمحاولات إعادة المحاولة
-    MAX_RETRIES = 3
-    
-    # الحد الأقصى للنص المدخل
-    MAX_INPUT_LENGTH = 30000
-    
-    def __init__(self, model: str = 'default'):
+    def __init__(self, api_key: str = GEMINI_API_KEY, model: str = GEMINI_MODEL):
         """
-        تهيئة الخدمة
+        تهيئة الخدمة.
         
         Args:
-            model: اسم النموذج ('flash', 'pro', 'default')
+            api_key: مفتاح API لـ Google Gemini
+            model: اسم الموديل المستخدم
         """
-        self.model_name = self.MODELS.get(model, self.MODELS['default'])
-        self.client = None
-        self.model = None
-        self._use_native_sdk = False
+        self._api_key = api_key
+        self._model_name = model
+        self._client = None
         
         self._initialize_client()
     
-    def _initialize_client(self):
-        """تهيئة العميل"""
-        api_key = os.environ.get('GOOGLE_API_KEY') or os.environ.get('GEMINI_API_KEY')
-        
-        # محاولة استخدام SDK الرسمي أولاً
-        if GENAI_AVAILABLE and api_key:
-            try:
-                genai.configure(api_key=api_key)
-                self.model = genai.GenerativeModel(self.model_name)
-                self._use_native_sdk = True
-                logger.info(f"Initialized Gemini with native SDK: {self.model_name}")
-                return
-            except Exception as e:
-                logger.warning(f"Failed to initialize native SDK: {e}")
-        
-        # Fallback إلى OpenAI-compatible API
-        if OPENAI_AVAILABLE:
-            try:
-                self.client = OpenAI()
-                self._use_native_sdk = False
-                logger.info("Initialized Gemini with OpenAI-compatible API")
-                return
-            except Exception as e:
-                logger.warning(f"Failed to initialize OpenAI client: {e}")
-        
-        logger.error("No AI client available")
+    def _initialize_client(self) -> None:
+        """تهيئة عميل Gemini."""
+        try:
+            from google import genai
+            
+            self._client = genai.Client(api_key=self._api_key)
+            logger.info(f"Gemini client initialized with model: {self._model_name}")
+            
+        except ImportError:
+            raise GeminiConfigurationError(
+                "google-genai not installed. Run: pip install google-genai"
+            )
+        except Exception as e:
+            raise GeminiConfigurationError(f"Failed to initialize Gemini client: {e}")
     
+    @property
     def is_available(self) -> bool:
-        """التحقق من توفر الخدمة"""
-        return self.model is not None or self.client is not None
+        """التحقق من توفر الخدمة."""
+        return self._client is not None
     
-    def _truncate_text(self, text: str, max_length: int = None) -> str:
-        """قص النص إذا كان طويلاً جداً"""
-        max_length = max_length or self.MAX_INPUT_LENGTH
+    def _truncate_text(self, text: str, max_length: int = MAX_INPUT_LENGTH) -> str:
+        """قص النص إذا تجاوز الحد الأقصى."""
         if len(text) > max_length:
+            logger.warning(f"Text truncated from {len(text)} to {max_length} characters")
             return text[:max_length] + "..."
         return text
     
-    def _generate_with_retry(self, prompt: str, system_prompt: str = None, 
-                             max_tokens: int = 500, temperature: float = 0.3) -> Optional[str]:
+    @retry_on_error(max_retries=MAX_RETRIES)
+    def _generate_content(self, prompt: str, max_tokens: int = 1000) -> str:
         """
-        توليد نص مع إعادة المحاولة
+        توليد محتوى باستخدام Gemini.
         
         Args:
             prompt: النص المطلوب
-            system_prompt: تعليمات النظام
             max_tokens: الحد الأقصى للتوكنات
-            temperature: درجة الإبداعية
             
         Returns:
-            str: النص المولد أو None
+            str: النص المولد
+            
+        Raises:
+            GeminiAPIError: عند فشل الـ API
+            GeminiRateLimitError: عند تجاوز حد الطلبات
         """
-        import time
-        
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                if self._use_native_sdk and self.model:
-                    return self._generate_native(prompt, system_prompt, max_tokens, temperature)
-                elif self.client:
-                    return self._generate_openai(prompt, system_prompt, max_tokens, temperature)
-                else:
-                    return None
-                    
-            except Exception as e:
-                logger.warning(f"AI generation attempt {attempt + 1} failed: {e}")
-                if attempt < self.MAX_RETRIES - 1:
-                    time.sleep(2 ** attempt)  # Exponential backoff
-                else:
-                    logger.error(f"AI generation failed after {self.MAX_RETRIES} attempts")
-                    return None
-        
-        return None
-    
-    def _generate_native(self, prompt: str, system_prompt: str = None,
-                        max_tokens: int = 500, temperature: float = 0.3) -> Optional[str]:
-        """التوليد باستخدام SDK الرسمي"""
-        generation_config = genai.GenerationConfig(
-            max_output_tokens=max_tokens,
-            temperature=temperature
-        )
-        
-        full_prompt = prompt
-        if system_prompt:
-            full_prompt = f"{system_prompt}\n\n{prompt}"
-        
-        response = self.model.generate_content(
-            full_prompt,
-            generation_config=generation_config
-        )
-        
-        return response.text.strip()
-    
-    def _generate_openai(self, prompt: str, system_prompt: str = None,
-                        max_tokens: int = 500, temperature: float = 0.3) -> Optional[str]:
-        """التوليد باستخدام OpenAI-compatible API"""
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-        
-        response = self.client.chat.completions.create(
-            model="gemini-2.5-flash",
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature
-        )
-        
-        return response.choices[0].message.content.strip()
-    
-    # ========== استخراج النص من الملفات ==========
-    
-    def extract_text_from_file(self, file_obj) -> Optional[str]:
-        """استخراج النص من الملف"""
-        if file_obj.content_type == 'external_link':
-            return None
-        
-        if not file_obj.local_file:
-            return None
-        
-        file_path = Path(file_obj.local_file.path)
-        extension = file_path.suffix.lower()
+        if not self.is_available:
+            raise GeminiConfigurationError("Gemini client not initialized")
         
         try:
-            if extension == '.pdf':
-                return self._extract_from_pdf(file_path)
-            elif extension == '.docx':
-                return self._extract_from_docx(file_path)
-            elif extension == '.pptx':
-                return self._extract_from_pptx(file_path)
-            elif extension in ['.txt', '.md']:
-                return self._extract_from_text(file_path)
+            from google import genai
+            from google.genai import types
+            
+            response = self._client.models.generate_content(
+                model=self._model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=max_tokens,
+                    temperature=0.3,
+                )
+            )
+            
+            # استخراج النص من الاستجابة
+            if response.text:
+                return response.text.strip()
             else:
-                return None
+                raise GeminiAPIError("Empty response from Gemini")
+                
         except Exception as e:
-            logger.error(f"Error extracting text from {file_path}: {e}")
-            return None
+            error_str = str(e).lower()
+            
+            if "rate" in error_str or "quota" in error_str:
+                raise GeminiRateLimitError(f"Rate limit exceeded: {e}")
+            elif "invalid" in error_str and "key" in error_str:
+                raise GeminiConfigurationError(f"Invalid API key: {e}")
+            else:
+                raise GeminiAPIError(f"Gemini API error: {e}")
     
-    def _extract_from_pdf(self, file_path: Path) -> Optional[str]:
-        """استخراج النص من PDF"""
-        if not PDF_AVAILABLE:
+    # ========== Public Methods ==========
+    
+    def extract_text_from_file(self, file_obj) -> Optional[str]:
+        """
+        استخراج النص من ملف.
+        
+        Args:
+            file_obj: كائن الملف (LectureFile)
+            
+        Returns:
+            str: النص المستخرج أو None
+        """
+        if not file_obj.local_file:
+            logger.warning(f"File {file_obj.id} has no local file")
             return None
         
-        text = ""
-        with pdfplumber.open(file_path) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-        return text.strip()
-    
-    def _extract_from_docx(self, file_path: Path) -> Optional[str]:
-        """استخراج النص من Word"""
-        if not DOCX_AVAILABLE:
+        try:
+            file_path = Path(file_obj.local_file.path)
+            text = TextExtractorFactory.extract_text(file_path)
+            logger.info(f"Extracted {len(text)} characters from {file_path.name}")
+            return text
+        except TextExtractionError as e:
+            logger.error(f"Text extraction failed for file {file_obj.id}: {e}")
             return None
-        
-        doc = Document(file_path)
-        text = "\n".join([para.text for para in doc.paragraphs])
-        return text.strip()
     
-    def _extract_from_pptx(self, file_path: Path) -> Optional[str]:
-        """استخراج النص من PowerPoint"""
-        if not PPTX_AVAILABLE:
-            return None
-        
-        prs = Presentation(file_path)
-        text = ""
-        for slide in prs.slides:
-            for shape in slide.shapes:
-                if hasattr(shape, "text"):
-                    text += shape.text + "\n"
-        return text.strip()
-    
-    def _extract_from_text(self, file_path: Path) -> Optional[str]:
-        """استخراج النص من ملف نصي"""
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return f.read().strip()
-    
-    # ========== خدمات AI الرئيسية ==========
-    
-    @cache_ai_result(timeout=3600)
+    @cache_result(timeout=CACHE_TIMEOUT)
     def generate_summary(self, text: str, max_length: int = 500) -> str:
         """
-        توليد تلخيص للنص
+        توليد تلخيص للنص.
         
         Args:
             text: النص المطلوب تلخيصه
@@ -319,71 +490,82 @@ class GeminiService:
             
         Returns:
             str: التلخيص
+            
+        Example:
+            summary = service.generate_summary("نص طويل جداً...")
         """
-        if not self.is_available():
-            return self._fallback_summary(text, max_length)
-        
         text = self._truncate_text(text)
         
-        system_prompt = "أنت مساعد أكاديمي متخصص في تلخيص المحتوى التعليمي باللغة العربية. قدم تلخيصات واضحة ومفيدة."
-        
-        prompt = f"""
-قم بتلخيص النص التالي بشكل مختصر ومفيد باللغة العربية.
-ركز على النقاط الرئيسية والمفاهيم الأساسية.
+        prompt = f"""أنت مساعد أكاديمي متخصص في تلخيص المحتوى التعليمي باللغة العربية.
+
+قم بتلخيص النص التالي بشكل مختصر ومفيد. ركز على:
+- النقاط الرئيسية والمفاهيم الأساسية
+- المعلومات الأكثر أهمية
+- الحفاظ على الدقة العلمية
 
 النص:
 {text}
 
-التلخيص:
-"""
-        
-        result = self._generate_with_retry(prompt, system_prompt, max_length, 0.3)
-        return result or self._fallback_summary(text, max_length)
+التلخيص (بحد أقصى {max_length} كلمة):"""
+
+        try:
+            return self._generate_content(prompt, max_tokens=max_length * 2)
+        except GeminiError as e:
+            logger.error(f"Summary generation failed: {e}")
+            return self._fallback_summary(text, max_length)
     
     def _fallback_summary(self, text: str, max_length: int) -> str:
-        """تلخيص بسيط في حالة عدم توفر الخدمة"""
-        sentences = text.split('.')
+        """تلخيص بسيط في حالة فشل الـ AI."""
+        sentences = text.replace('\n', ' ').split('.')
         summary = ""
         for sentence in sentences:
-            if len(summary) + len(sentence) < max_length:
-                summary += sentence.strip() + ". "
-            else:
+            sentence = sentence.strip()
+            if sentence and len(summary) + len(sentence) < max_length:
+                summary += sentence + ". "
+            elif len(summary) > 100:
                 break
         return summary.strip() or text[:max_length] + "..."
     
-    @cache_ai_result(timeout=3600)
-    def generate_questions(self, text: str, question_type: str = 'mixed', 
-                          num_questions: int = 5) -> List[Dict[str, Any]]:
+    @cache_result(timeout=CACHE_TIMEOUT)
+    def generate_questions(
+        self, 
+        text: str, 
+        question_type: QuestionType = QuestionType.MIXED,
+        num_questions: int = 5
+    ) -> List[Dict[str, Any]]:
         """
-        توليد أسئلة من النص
+        توليد أسئلة من النص.
         
         Args:
             text: النص المصدر
-            question_type: نوع الأسئلة ('mcq', 'true_false', 'short_answer', 'mixed')
+            question_type: نوع الأسئلة
             num_questions: عدد الأسئلة
             
         Returns:
             List[Dict]: قائمة الأسئلة
+            
+        Example:
+            questions = service.generate_questions(
+                "نص...", 
+                QuestionType.MCQ, 
+                5
+            )
         """
-        if not self.is_available():
-            return self._fallback_questions(text, num_questions)
-        
-        text = self._truncate_text(text, 8000)
+        text = self._truncate_text(text, 10000)
         
         type_instruction = {
-            'mcq': 'أسئلة اختيار من متعدد فقط',
-            'true_false': 'أسئلة صح أو خطأ فقط',
-            'short_answer': 'أسئلة إجابة قصيرة فقط',
-            'mixed': 'مزيج من أنواع الأسئلة المختلفة'
-        }.get(question_type, 'مزيج من أنواع الأسئلة')
+            QuestionType.MCQ: "أسئلة اختيار من متعدد (4 خيارات لكل سؤال)",
+            QuestionType.TRUE_FALSE: "أسئلة صح أو خطأ",
+            QuestionType.SHORT_ANSWER: "أسئلة إجابة قصيرة",
+            QuestionType.MIXED: "مزيج من أنواع الأسئلة المختلفة",
+        }.get(question_type, "مزيج من أنواع الأسئلة")
         
-        system_prompt = "أنت مدرس متخصص في إنشاء أسئلة اختبارية تعليمية باللغة العربية. قدم الإجابة بصيغة JSON فقط."
-        
-        prompt = f"""
+        prompt = f"""أنت مدرس متخصص في إنشاء أسئلة اختبارية تعليمية باللغة العربية.
+
 قم بإنشاء {num_questions} سؤال من النص التالي.
 نوع الأسئلة المطلوب: {type_instruction}
 
-أرجع الإجابة بصيغة JSON كالتالي:
+أرجع الإجابة بصيغة JSON فقط بدون أي نص إضافي:
 [
     {{
         "type": "mcq" أو "true_false" أو "short_answer",
@@ -394,43 +576,59 @@ class GeminiService:
     }}
 ]
 
+ملاحظات:
+- للأسئلة من نوع true_false، الخيارات هي ["صح", "خطأ"]
+- للأسئلة من نوع short_answer، لا تضع options
+
 النص:
 {text}
 
-الأسئلة (JSON فقط):
-"""
-        
-        result = self._generate_with_retry(prompt, system_prompt, 2000, 0.5)
-        
-        if result:
-            try:
-                # محاولة استخراج JSON
-                if '```json' in result:
-                    result = result.split('```json')[1].split('```')[0]
-                elif '```' in result:
-                    result = result.split('```')[1].split('```')[0]
-                
-                questions = json.loads(result)
-                return questions
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse questions JSON: {e}")
-        
-        return self._fallback_questions(text, num_questions)
+الأسئلة (JSON فقط):"""
+
+        try:
+            result = self._generate_content(prompt, max_tokens=2000)
+            return self._parse_questions_json(result)
+        except GeminiError as e:
+            logger.error(f"Question generation failed: {e}")
+            return self._fallback_questions(num_questions)
     
-    def _fallback_questions(self, text: str, num_questions: int) -> List[Dict[str, Any]]:
-        """أسئلة بسيطة في حالة عدم توفر الخدمة"""
-        return [
-            {
-                'type': 'short_answer',
-                'question': 'ما هي الفكرة الرئيسية في هذا النص؟',
-                'answer': 'راجع النص للإجابة',
-                'explanation': 'هذا سؤال تلقائي'
-            }
-        ]
+    def _parse_questions_json(self, result: str) -> List[Dict[str, Any]]:
+        """تحليل JSON الأسئلة."""
+        # تنظيف النتيجة
+        result = result.strip()
+        
+        # إزالة markdown code blocks
+        if '```json' in result:
+            result = result.split('```json')[1].split('```')[0]
+        elif '```' in result:
+            result = result.split('```')[1].split('```')[0]
+        
+        result = result.strip()
+        
+        try:
+            questions = json.loads(result)
+            if isinstance(questions, list):
+                return questions
+            else:
+                logger.warning("Questions result is not a list")
+                return []
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse questions JSON: {e}")
+            logger.debug(f"Raw result: {result[:500]}")
+            return []
+    
+    def _fallback_questions(self, num_questions: int) -> List[Dict[str, Any]]:
+        """أسئلة افتراضية في حالة الفشل."""
+        return [{
+            'type': 'short_answer',
+            'question': 'ما هي الفكرة الرئيسية في هذا النص؟',
+            'answer': 'راجع النص للإجابة',
+            'explanation': 'هذا سؤال تلقائي بسبب عدم توفر خدمة AI'
+        }]
     
     def ask_document(self, text: str, question: str) -> str:
         """
-        الإجابة على سؤال من سياق المستند
+        الإجابة على سؤال من سياق المستند.
         
         Args:
             text: نص المستند
@@ -438,46 +636,72 @@ class GeminiService:
             
         Returns:
             str: الإجابة
+            
+        Example:
+            answer = service.ask_document(
+                "نص المستند...",
+                "ما هي الفكرة الرئيسية؟"
+            )
         """
-        if not self.is_available():
-            return "عذراً، خدمة الذكاء الاصطناعي غير متاحة حالياً."
-        
         text = self._truncate_text(text)
         
-        system_prompt = "أنت مساعد أكاديمي يجيب على الأسئلة بناءً على محتوى المستندات المقدمة. أجب باللغة العربية بشكل واضح ومفيد."
-        
-        prompt = f"""
-أجب على السؤال التالي بناءً على المحتوى المقدم فقط.
-إذا لم تجد الإجابة في المحتوى، قل ذلك بوضوح.
+        prompt = f"""أنت مساعد أكاديمي يجيب على الأسئلة بناءً على محتوى المستندات المقدمة.
+
+قواعد الإجابة:
+1. أجب بناءً على المحتوى المقدم فقط
+2. إذا لم تجد الإجابة في المحتوى، قل ذلك بوضوح
+3. استخدم اللغة العربية الفصحى
+4. كن واضحاً ومختصراً
 
 المحتوى:
 {text}
 
 السؤال: {question}
 
-الإجابة:
-"""
+الإجابة:"""
+
+        try:
+            return self._generate_content(prompt, max_tokens=500)
+        except GeminiError as e:
+            logger.error(f"Document Q&A failed: {e}")
+            return "عذراً، حدث خطأ أثناء معالجة سؤالك. يرجى المحاولة مرة أخرى."
+    
+    def test_connection(self) -> AIResponse:
+        """
+        اختبار الاتصال بـ Gemini.
         
-        result = self._generate_with_retry(prompt, system_prompt, 500, 0.3)
-        return result or "عذراً، حدث خطأ أثناء معالجة سؤالك. يرجى المحاولة مرة أخرى."
+        Returns:
+            AIResponse: نتيجة الاختبار
+            
+        Example:
+            result = service.test_connection()
+            if result.success:
+                print("Connected!")
+        """
+        try:
+            response = self._generate_content("قل: مرحباً، أنا جاهز!", max_tokens=50)
+            return AIResponse(success=True, data=response)
+        except GeminiError as e:
+            return AIResponse(success=False, error=str(e))
 
 
-# ========== Celery Tasks (إذا كان Celery متاحاً) ==========
+# ========== Celery Tasks (Optional) ==========
 
 try:
     from celery import shared_task
     CELERY_AVAILABLE = True
 except ImportError:
     CELERY_AVAILABLE = False
-    # إنشاء decorator وهمي
-    def shared_task(func):
-        return func
+    def shared_task(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def generate_summary_async(self, file_id: int) -> Dict[str, Any]:
     """
-    مهمة Celery لتوليد التلخيص بشكل غير متزامن
+    مهمة Celery لتوليد التلخيص بشكل غير متزامن.
     
     Args:
         file_id: معرف الملف
@@ -492,21 +716,15 @@ def generate_summary_async(self, file_id: int) -> Dict[str, Any]:
         file_obj = LectureFile.objects.get(pk=file_id)
         service = GeminiService()
         
-        # استخراج النص
         text = service.extract_text_from_file(file_obj)
         if not text:
             return {'success': False, 'error': 'لا يمكن استخراج النص من الملف'}
         
-        # توليد التلخيص
         summary = service.generate_summary(text)
         
-        # حفظ التلخيص
-        ai_summary, created = AISummary.objects.update_or_create(
+        ai_summary, _ = AISummary.objects.update_or_create(
             file=file_obj,
-            defaults={
-                'summary_text': summary,
-                'is_cached': True
-            }
+            defaults={'summary_text': summary, 'is_cached': True}
         )
         
         return {
@@ -519,14 +737,20 @@ def generate_summary_async(self, file_id: int) -> Dict[str, Any]:
         return {'success': False, 'error': 'الملف غير موجود'}
     except Exception as e:
         logger.error(f"Async summary generation failed: {e}")
-        raise self.retry(exc=e)
+        if CELERY_AVAILABLE:
+            raise self.retry(exc=e)
+        return {'success': False, 'error': str(e)}
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def generate_questions_async(self, file_id: int, question_type: str = 'mixed',
-                            num_questions: int = 5) -> Dict[str, Any]:
+def generate_questions_async(
+    self, 
+    file_id: int, 
+    question_type: str = 'mixed',
+    num_questions: int = 5
+) -> Dict[str, Any]:
     """
-    مهمة Celery لتوليد الأسئلة بشكل غير متزامن
+    مهمة Celery لتوليد الأسئلة بشكل غير متزامن.
     
     Args:
         file_id: معرف الملف
@@ -543,16 +767,14 @@ def generate_questions_async(self, file_id: int, question_type: str = 'mixed',
         file_obj = LectureFile.objects.get(pk=file_id)
         service = GeminiService()
         
-        # استخراج النص
         text = service.extract_text_from_file(file_obj)
         if not text:
             return {'success': False, 'error': 'لا يمكن استخراج النص من الملف'}
         
-        # توليد الأسئلة
-        questions = service.generate_questions(text, question_type, num_questions)
+        q_type = QuestionType(question_type) if question_type in [e.value for e in QuestionType] else QuestionType.MIXED
+        questions = service.generate_questions(text, q_type, num_questions)
         
-        # حفظ الأسئلة
-        saved_questions = []
+        saved_ids = []
         for q in questions:
             ai_question = AIGeneratedQuestion.objects.create(
                 file=file_obj,
@@ -562,16 +784,18 @@ def generate_questions_async(self, file_id: int, question_type: str = 'mixed',
                 correct_answer=q.get('answer', ''),
                 explanation=q.get('explanation', '')
             )
-            saved_questions.append(ai_question.id)
+            saved_ids.append(ai_question.id)
         
         return {
             'success': True,
-            'question_ids': saved_questions,
-            'count': len(saved_questions)
+            'question_ids': saved_ids,
+            'count': len(saved_ids)
         }
         
     except LectureFile.DoesNotExist:
         return {'success': False, 'error': 'الملف غير موجود'}
     except Exception as e:
         logger.error(f"Async question generation failed: {e}")
-        raise self.retry(exc=e)
+        if CELERY_AVAILABLE:
+            raise self.retry(exc=e)
+        return {'success': False, 'error': str(e)}
